@@ -22,7 +22,23 @@ def load(self, context, filepath="", isMap=False):
     mesh_objs = []
     mesh_mats = []
 
+    mats = []
+    sub_mats = []
+
     for mat in model.materials:
+        if isMap:
+            mat_name = mat.name[-1]
+
+            if mat_name == "0":
+                mats.append(mat)
+            elif mat_name == "1":
+                mats.append(mat)
+            elif mat_name == "2":
+                sub_mats.append(mat)
+        else:
+            mats.append(mat)
+            
+    for mat in mats:
         new_mat = bpy.data.materials.get(mat.name)
         if new_mat is not None:
             mesh_mats.append(new_mat)
@@ -37,8 +53,12 @@ def load(self, context, filepath="", isMap=False):
         bsdf_shader = new_mat.node_tree.nodes["Principled BSDF"]
         normal_map = new_mat.node_tree.nodes.new("ShaderNodeNormalMap")
         invert_node = new_mat.node_tree.nodes.new("ShaderNodeInvert")
+        seperate_color_node = new_mat.node_tree.nodes.new("ShaderNodeSeparateColor")
+        combine_color_node = new_mat.node_tree.nodes.new("ShaderNodeCombineColor")
+        combine_color_node.inputs["Blue"].default_value = 1.0
         material_color_map = new_mat.node_tree.nodes.new("ShaderNodeTexImage")
-        material_specular_map = new_mat.node_tree.nodes.new("ShaderNodeTexImage")
+        if mat.name[-2:-1] != "1" and isMap:
+            material_specular_map = new_mat.node_tree.nodes.new("ShaderNodeTexImage")
         material_normal_map = new_mat.node_tree.nodes.new("ShaderNodeTexImage")
 
         if ("glass" in mat.name or mat.name.startswith("decal_")): #or mat.name.endswith("_blend")) and len(matList) == 1 and "fiberglass" not in mat.name:
@@ -65,41 +85,183 @@ def load(self, context, filepath="", isMap=False):
             material_normal_map.image.colorspace_settings.name = "Non-Color"
         except RuntimeError:
             pass
+                
+        if mat.name[-1] == "1" and isMap:
+            secondary_invert_node = new_mat.node_tree.nodes.new("ShaderNodeInvert")
+            secondary_seperate_color_node = new_mat.node_tree.nodes.new("ShaderNodeSeparateColor")
+            secondary_combine_color_node = new_mat.node_tree.nodes.new("ShaderNodeCombineColor")
+            secondary_combine_color_node.inputs["Blue"].default_value = 1.0
+            secondary_material_color_map = new_mat.node_tree.nodes.new("ShaderNodeTexImage")
+            secondary_material_specular_map = new_mat.node_tree.nodes.new("ShaderNodeTexImage")
+            secondary_material_normal_map = new_mat.node_tree.nodes.new("ShaderNodeTexImage")
+            mix_seperate_color_node = new_mat.node_tree.nodes.new("ShaderNodeSeparateColor")
+            mix_color_attribute_node = new_mat.node_tree.nodes.new("ShaderNodeVertexColor")
+
+            blend_texture_node = new_mat.node_tree.nodes.new("ShaderNodeGroup")
+            blend_texture_node.node_tree = bpy.data.node_groups['BlendTextures']
+
+            secondary_mat_name = mat.name[mat.name.find(":") + 1:-1] + "2"
+            secondary_mat = mat;
+            for secondary_mat_i in sub_mats:
+                if secondary_mat_i.name == secondary_mat_name:
+                    secondary_mat = secondary_mat_i;
+                    break
+
+                # Load Textures
+            try:
+                secondary_material_color_map.image = bpy.data.images.load(
+                    __build_image_path__(filepath, secondary_mat.inputData.diffuseMap))
+            except RuntimeError:
+                pass
             
+            try:
+                secondary_material_specular_map.image = bpy.data.images.load(
+                    __build_image_path__(filepath, secondary_mat.inputData.specularMap))
+                secondary_material_specular_map.image.colorspace_settings.name = "Non-Color"
+            except RuntimeError:
+                pass
 
-        # Node Location
-        material_color_map.location = (-600, 350)
+            try:
+                secondary_material_normal_map.image = bpy.data.images.load(
+                    __build_image_path__(filepath, secondary_mat.inputData.normalMap))
+                secondary_material_normal_map.image.colorspace_settings.name = "Non-Color"
+            except RuntimeError:
+                pass
 
-        material_specular_map.location = (-600, 0)
+            normal_map.location = (-180, -280)
+            blend_texture_node.location = (-400, 200)
+            material_color_map.location = (-1150, 1000)
+            secondary_material_color_map.location = (-1150, 600)
+            material_normal_map.location = (-1500, 200)
+            secondary_material_normal_map.location = (-1500, -200)
+            seperate_color_node.location = (-1220, 200)
+            secondary_seperate_color_node.location = (-1220, -80)
+            combine_color_node.location = (-1050, 200)
+            secondary_combine_color_node.location = (-1050, -80)
+            material_specular_map.location = (-1150, -400)
+            secondary_material_specular_map.location = (-1150, -800)
+            invert_node.location = (-850, -550)
+            secondary_invert_node.location = (-800, -800)
+            mix_seperate_color_node.location = (-520, -555)
+            mix_color_attribute_node.location = (-520, -820)
+            mix_color_attribute_node.layer_name = "Color"
 
-        invert_node.location = (-250, 0)
+            new_mat.node_tree.links.new(
+                mix_seperate_color_node.inputs["Color"], mix_color_attribute_node.outputs["Color"])
 
-        material_normal_map.location = (-600, -350)
+            new_mat.node_tree.links.new(
+                blend_texture_node.inputs["Vertex Alpha"], mix_seperate_color_node.outputs["Green"])
 
-        normal_map.location = (-250, -300)
+            new_mat.node_tree.links.new(
+                blend_texture_node.inputs["Base Color_1"], material_color_map.outputs["Color"])
 
-        # Connect Nodes
-        new_mat.node_tree.links.new(
-            bsdf_shader.inputs["Base Color"], material_color_map.outputs["Color"])
+            new_mat.node_tree.links.new(
+                blend_texture_node.inputs["Base Color_2"], secondary_material_color_map.outputs["Color"])
+
+            new_mat.node_tree.links.new(
+                blend_texture_node.inputs["Alpha"], secondary_material_color_map.outputs["Alpha"])
+
+            new_mat.node_tree.links.new(
+                seperate_color_node.inputs["Color"], material_normal_map.outputs["Color"])
+            
+            new_mat.node_tree.links.new(
+                secondary_seperate_color_node.inputs["Color"], secondary_material_normal_map.outputs["Color"])
+
+            new_mat.node_tree.links.new(
+                blend_texture_node.inputs["Normal_1"], combine_color_node.outputs["Color"])
+
+            new_mat.node_tree.links.new(
+                blend_texture_node.inputs["Normal_2"], secondary_combine_color_node.outputs["Color"])
+
+            new_mat.node_tree.links.new(
+                invert_node.inputs["Color"], material_specular_map.outputs["Alpha"])
+
+            new_mat.node_tree.links.new(
+                secondary_invert_node.inputs["Color"], secondary_material_specular_map.outputs["Alpha"])
+
+            new_mat.node_tree.links.new(
+                blend_texture_node.inputs["Roughness_1"], invert_node.outputs["Color"])
+
+            new_mat.node_tree.links.new(
+                blend_texture_node.inputs["Roughness_2"], secondary_invert_node.outputs["Color"])
+
+            new_mat.node_tree.links.new(
+                blend_texture_node.inputs["Specular_1"], material_specular_map.outputs["Color"])
+
+            new_mat.node_tree.links.new(
+                blend_texture_node.inputs["Specular_2"], secondary_material_specular_map.outputs["Color"])
+
+            new_mat.node_tree.links.new(
+                bsdf_shader.inputs["Base Color"], blend_texture_node.outputs["Base Color"])
+
+            new_mat.node_tree.links.new(
+                bsdf_shader.inputs["Specular"], blend_texture_node.outputs["Specular"])
+
+            new_mat.node_tree.links.new(
+                bsdf_shader.inputs["Roughness"], blend_texture_node.outputs["Roughness"])
+            
+            new_mat.node_tree.links.new(
+                normal_map.inputs["Color"], blend_texture_node.outputs["Normal"])
+
+            new_mat.node_tree.links.new(
+                bsdf_shader.inputs["Normal"], normal_map.outputs["Normal"])
+
+            new_mat.node_tree.links.new(
+                combine_color_node.inputs["Red"], seperate_color_node.outputs["Red"])
         
-        new_mat.node_tree.links.new(
-            bsdf_shader.inputs["Alpha"], material_color_map.outputs["Alpha"])
+            new_mat.node_tree.links.new(
+                combine_color_node.inputs["Green"], seperate_color_node.outputs["Green"])
+            
+            new_mat.node_tree.links.new(
+                secondary_combine_color_node.inputs["Red"], secondary_seperate_color_node.outputs["Red"])
         
-        new_mat.node_tree.links.new(
-            bsdf_shader.inputs["Specular"], material_specular_map.outputs["Color"])
+            new_mat.node_tree.links.new(
+                secondary_combine_color_node.inputs["Green"], secondary_seperate_color_node.outputs["Green"])
+        else:
+            # Node Location
+            material_color_map.location = (-600, 350)
+            if mat.name[-2:-1] != "1" and isMap:
+                material_specular_map.location = (-600, 0)
+            invert_node.location = (-250, 0)
+            material_normal_map.location = (-900, -350)
+            normal_map.location = (-250, -300)
+            seperate_color_node.location = (-610, -450)
+            combine_color_node.location = (-450, -450)
 
-        new_mat.node_tree.links.new(
-            invert_node.inputs["Color"], material_specular_map.outputs["Alpha"])
-        
-        new_mat.node_tree.links.new(
-            bsdf_shader.inputs["Roughness"], invert_node.outputs["Color"])
+            # Connect Nodes
+            new_mat.node_tree.links.new(
+                bsdf_shader.inputs["Base Color"], material_color_map.outputs["Color"])
+            
+            new_mat.node_tree.links.new(
+                bsdf_shader.inputs["Roughness"], invert_node.outputs["Color"])
 
-        new_mat.node_tree.links.new(
-            normal_map.inputs["Color"], material_normal_map.outputs["Color"])
+            new_mat.node_tree.links.new(
+                seperate_color_node.inputs["Color"], material_normal_map.outputs["Color"])
+            
+            new_mat.node_tree.links.new(
+                combine_color_node.inputs["Red"], seperate_color_node.outputs["Red"])
+            
+            new_mat.node_tree.links.new(
+                combine_color_node.inputs["Green"], seperate_color_node.outputs["Green"])
+            
+            new_mat.node_tree.links.new(
+                normal_map.inputs["Color"], combine_color_node.outputs["Color"])
 
-        new_mat.node_tree.links.new(
-            bsdf_shader.inputs["Normal"], normal_map.outputs["Normal"])
+            new_mat.node_tree.links.new(
+                bsdf_shader.inputs["Normal"], normal_map.outputs["Normal"])
+            
+            if mat.name[-2:-1] != "1" and isMap:
+                new_mat.node_tree.links.new(
+                    bsdf_shader.inputs["Alpha"], material_color_map.outputs["Alpha"])
 
+                new_mat.node_tree.links.new(
+                    bsdf_shader.inputs["Specular"], material_specular_map.outputs["Color"])
+                
+                new_mat.node_tree.links.new(
+                    invert_node.inputs["Color"], material_specular_map.outputs["Alpha"])
+            else:
+                new_mat.node_tree.links.new(
+                    invert_node.inputs["Color"], material_color_map.outputs["Alpha"])
         mesh_mats.append(new_mat)
 
     i = 0

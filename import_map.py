@@ -81,6 +81,7 @@ def createTextureBlendGroup():
 
 def load(self, context, filepath=""):
     from . import import_semodel
+    createTextureBlendGroup()
     result = import_semodel.load(self, context, filepath, True)
 
     return result
